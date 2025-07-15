@@ -1,67 +1,74 @@
 import dotenv from "dotenv";
-import { ethers } from "ethers";
-import TronWeb from "tronweb";
-import { Telegraf } from "telegraf";
-import bip39 from "bip39";
-import { HDNodeWallet } from "ethers";
-import fetch from "node-fetch";
-
 dotenv.config();
 
-// === Load config ===
-const seed = process.env.SEED_PHRASE;
-const ethForwardTo = process.env.ETH_FORWARD_TO;
-const trxForwardTo = process.env.TRX_FORWARD_TO;
-const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
-const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+import { ethers } from "ethers";
+import TronWeb from "tronweb";
+import bip39 from "bip39";
+import hdkey from "hdkey";
+import axios from "axios";
 
-// === Telegram Bot ===
-const bot = new Telegraf(telegramToken);
-const sendAlert = async (msg) => {
-  if (telegramToken && telegramChatId) {
-    await fetch(`https://api.telegram.org/bot${telegramToken}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: telegramChatId, text: msg })
+const {
+  SEED_PHRASE,
+  ETH_FORWARD_TO,
+  TRX_FORWARD_TO,
+  TELEGRAM_BOT_TOKEN,
+  TELEGRAM_CHAT_ID
+} = process.env;
+
+const ethProvider = new ethers.providers.JsonRpcProvider("https://rpc.ankr.com/eth");
+const ethWallet = ethers.Wallet.fromMnemonic(SEED_PHRASE).connect(ethProvider);
+
+const seed = await bip39.mnemonicToSeed(SEED_PHRASE);
+const root = hdkey.fromMasterSeed(seed);
+const tronNode = root.derive("m/44'/195'/0'/0/0");
+const tronPrivateKey = tronNode.privateKey.toString("hex");
+
+const tronWeb = new TronWeb({
+  fullHost: "https://api.trongrid.io",
+  privateKey: tronPrivateKey
+});
+
+const notifyTelegram = async (msg) => {
+  try {
+    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      chat_id: TELEGRAM_CHAT_ID,
+      text: msg,
     });
+  } catch (e) {
+    console.error("Telegram error:", e.message);
   }
 };
 
-// === Ethereum Setup ===
-const provider = new ethers.InfuraProvider("mainnet");
-const hdNode = HDNodeWallet.fromPhrase(seed);
-const ethWallet = hdNode.connect(provider);
-
-// === Tron Setup ===
-const tronNode = "https://api.trongrid.io";
-const tronWeb = new TronWeb({
-  fullHost: tronNode,
-  privateKey: TronWeb.fromMnemonic(seed)[0].privateKey
-});
-
-// === Monitor Loop ===
-async function monitor() {
-  try {
-    // Ethereum
-    const ethBalance = await provider.getBalance(ethWallet.address);
-    if (ethBalance.gt(0)) {
-      const tx = await ethWallet.sendTransaction({
-        to: ethForwardTo,
-        value: ethBalance.sub(21000n * (await provider.getFeeData()).gasPrice) // leave enough gas
-      });
-      await sendAlert(`⚡ ETH Forwarded: ${ethers.formatEther(ethBalance)} ETH\nTx: https://etherscan.io/tx/${tx.hash}`);
-    }
-
-    // Tron
-    const trxBalance = await tronWeb.trx.getBalance();
-    if (trxBalance > 0) {
-      const txid = await tronWeb.trx.sendTransaction(trxForwardTo, trxBalance - 100000); // leave 0.1 TRX for bandwidth
-      await sendAlert(`⚡ TRX Forwarded: ${trxBalance / 1e6} TRX\nTx: https://tronscan.org/#/transaction/${txid.txid}`);
-    }
-  } catch (err) {
-    console.error("Error:", err.message);
+async function forwardEth() {
+  const balance = await ethProvider.getBalance(ethWallet.address);
+  if (balance.gt(ethers.utils.parseEther("0.001"))) {
+    const tx = await ethWallet.sendTransaction({
+      to: ETH_FORWARD_TO,
+      value: balance.sub(ethers.utils.parseEther("0.0005")),
+    });
+    await notifyTelegram(`🟢 ETH forwarded: ${tx.hash}`);
   }
 }
 
-setInterval(monitor, 3000);
-console.log("🔁 Gas drain bot is running...");
+async function forwardTrx() {
+  const balance = await tronWeb.trx.getBalance(tronWeb.defaultAddress.base58);
+  if (balance > 1000000) {
+    const tx = await tronWeb.trx.sendTransaction(TRX_FORWARD_TO, balance - 500000);
+    await notifyTelegram(`🟢 TRX forwarded: ${tx.txID}`);
+  }
+}
+
+async function mainLoop() {
+  console.log("🔁 Bot started...");
+  while (true) {
+    try {
+      await forwardEth();
+      await forwardTrx();
+    } catch (e) {
+      console.error("❌ Error:", e.message);
+    }
+    await new Promise(r => setTimeout(r, 30000));
+  }
+}
+
+mainLoop();
