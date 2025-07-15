@@ -1,17 +1,17 @@
 {
-  "name": "gas-drain-bot",
+  "name": "eth-trx-forward-bot",
   "version": "1.0.0",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
+    "axios": "^1.6.8",
     "bip39": "^3.0.4",
-    "dotenv": "^16.0.3",
-    "ethers": "^6.6.2",
-    "node-fetch": "^3.3.2",
-    "tronweb": "^4.4.0",
-    "telegraf": "^4.12.2"
-  },
-  "type": "module"
+    "dotenv": "^16.3.1",
+    "ethers": "^6.10.0",
+    "hdkey": "^2.0.1",
+    "tronweb": "^5.2.0"
+  }
 }
